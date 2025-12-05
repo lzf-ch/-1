@@ -5,6 +5,8 @@ import { RoomCard } from './components/RoomCard';
 import { AdminPanel } from './components/AdminPanel';
 import { SelectionModal } from './components/SelectionModal';
 
+const ADMIN_PASSWORD = "5658135";
+
 const App: React.FC = () => {
   const [state, setState] = useState<AppState>(getInitialState);
   const [view, setView] = useState<'GRID' | 'ADMIN'>('GRID');
@@ -22,8 +24,14 @@ const App: React.FC = () => {
   const [modalRoom, setModalRoom] = useState<Room | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
-  // Sync with LocalStorage for Multi-tab simulation
+  // Login UI State
+  const [loginSearch, setLoginSearch] = useState('');
+  const [pendingAdmin, setPendingAdmin] = useState<User | null>(null);
+  const [passwordInput, setPasswordInput] = useState('');
+
+  // Data Synchronization: Polling & Event Listener
   useEffect(() => {
+    // Listener for cross-tab sync
     const handleStorageChange = (e: StorageEvent) => {
       if (e.key === 'prime_estate_db_v1' && e.newValue) {
         try {
@@ -38,7 +46,29 @@ const App: React.FC = () => {
       }
     };
     window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
+
+    // Polling for robustness (simulating real-time fetch)
+    const pollInterval = setInterval(() => {
+        try {
+            const latest = getInitialState();
+            // We update state to match disk, but strictly preserve the local currentUser session
+            setState(prev => {
+                // Optimization: In a real app, we'd check timestamps or hash. 
+                // Here we simply overwrite rooms/users to ensure consistency.
+                return {
+                    ...latest,
+                    currentUser: prev.currentUser // Keep local login
+                };
+            });
+        } catch(e) {
+            console.error("Polling error", e);
+        }
+    }, 2000);
+
+    return () => {
+        window.removeEventListener('storage', handleStorageChange);
+        clearInterval(pollInterval);
+    };
   }, []);
 
   // Persist on change
@@ -55,15 +85,31 @@ const App: React.FC = () => {
   };
 
   // Actions
-  const handleLogin = (userId: string) => {
-    const user = state.users.find(u => u.id === userId);
-    if (user) {
-      updateState({ ...state, currentUser: user });
-    }
+  const handleInitiateLogin = (user: User) => {
+      if (user.isAdmin) {
+          setPendingAdmin(user);
+          setPasswordInput('');
+      } else {
+          updateState({ ...state, currentUser: user });
+      }
+  };
+
+  const handleAdminLoginSubmit = (e: React.FormEvent) => {
+      e.preventDefault();
+      if (passwordInput === ADMIN_PASSWORD) {
+          if (pendingAdmin) {
+              updateState({ ...state, currentUser: pendingAdmin });
+              setPendingAdmin(null);
+          }
+      } else {
+          alert("管理员密码错误");
+          setPasswordInput('');
+      }
   };
 
   const handleLogout = () => {
     updateState({ ...state, currentUser: null });
+    setView('GRID'); // Reset view on logout
   };
 
   // Prepare Data for Dropdowns
@@ -80,7 +126,6 @@ const App: React.FC = () => {
   const availableFloors = useMemo(() => {
     if (!quickBuilding) return [];
     const floors = new Set(state.rooms.filter(r => r.building === quickBuilding).map(r => r.floor));
-    // Fix: Explicitly cast to Number to avoid arithmetic on unknown types or strings
     return Array.from(floors).sort((a,b) => Number(a) - Number(b));
   }, [state.rooms, quickBuilding]);
 
@@ -107,48 +152,67 @@ const App: React.FC = () => {
   const executeSelection = () => {
     if (!modalRoom || !state.currentUser) return;
 
-    // Refresh room data to ensure status is current
-    const target = state.rooms.find(r => r.id === modalRoom.id);
+    // CRITICAL: Re-read state from storage to prevent race conditions (Simulated Backend Check)
+    const latestState = getInitialState();
+    const target = latestState.rooms.find(r => r.id === modalRoom.id);
+
     if (!target) {
         setIsModalOpen(false);
+        alert("数据同步错误，房源不存在");
         return;
     }
 
     const currentUserId = state.currentUser.id;
     const isUserAdmin = state.currentUser.isAdmin;
-    let updatedRooms = [...state.rooms];
+    let updatedRooms = [...latestState.rooms]; // Work on fresh list
 
     // Admin Mode Logic
     if (isUserAdmin && adminMode === 'LOCK') {
          const newStatus = target.status === RoomStatus.LOCKED ? RoomStatus.AVAILABLE : RoomStatus.LOCKED;
-         // If unlocking, or locking (clearing owner)
          updatedRooms = updatedRooms.map(r => r.id === target.id ? { ...r, status: newStatus, ownerId: null } : r);
     } 
     // User Mode Logic
     else {
-        // Deselect logic
+        // Deselect logic (If I own it, I can return it)
         if (target.ownerId === currentUserId) {
              updatedRooms = updatedRooms.map(r => r.id === target.id ? { ...r, status: RoomStatus.AVAILABLE, ownerId: null } : r);
         } 
         // Select logic
         else if (target.status === RoomStatus.AVAILABLE) {
-             // Limit check
-             const mySelections = state.rooms.filter(r => r.ownerId === currentUserId);
+             // 1. Check Global Availability again (Double Check)
+             if (target.status !== RoomStatus.AVAILABLE) {
+                 alert("很抱歉，该房源刚刚已被其他人抢选！");
+                 setIsModalOpen(false);
+                 return;
+             }
+
+             // 2. Limit check (Must count usage from Fresh State)
+             const mySelections = latestState.rooms.filter(r => r.ownerId === currentUserId);
              if (mySelections.length >= state.currentUser.maxSelections) {
                  alert(`您只能选择 ${state.currentUser.maxSelections} 套房源。`);
                  setIsModalOpen(false);
                  return;
              }
+             
+             // 3. Commit
              updatedRooms = updatedRooms.map(r => r.id === target.id ? { ...r, status: RoomStatus.SELECTED, ownerId: currentUserId } : r);
         } else {
-             // Should be handled by modal display but double check
-             alert("该房源不可选择");
+             // Already taken by someone else
+             alert("该房源不可选择（已被锁定或选择）");
              setIsModalOpen(false);
              return;
         }
     }
 
-    updateState({ ...state, rooms: updatedRooms });
+    // Update Global State
+    // We preserve the current user session but update everything else
+    const nextState = {
+        ...latestState,
+        currentUser: state.currentUser,
+        rooms: updatedRooms
+    };
+    
+    updateState(nextState);
     setIsModalOpen(false);
     setModalRoom(null);
   };
@@ -168,7 +232,10 @@ const App: React.FC = () => {
   };
 
   const handleRandomSelect = () => {
-    const availableRooms = state.rooms.filter(r => r.status === RoomStatus.AVAILABLE);
+    // Always fetch fresh state for random to avoid picking a taken room
+    const latestState = getInitialState();
+    const availableRooms = latestState.rooms.filter(r => r.status === RoomStatus.AVAILABLE);
+    
     if (availableRooms.length === 0) {
       alert("很遗憾，当前已无可选房源！");
       return;
@@ -176,12 +243,10 @@ const App: React.FC = () => {
     const randomIndex = Math.floor(Math.random() * availableRooms.length);
     const selectedRoom = availableRooms[randomIndex];
     
-    // Auto populate dropdowns (optional UX)
     setQuickBuilding(selectedRoom.building);
     setQuickFloor(selectedRoom.floor.toString());
     setQuickRoomId(selectedRoom.id);
 
-    // Scroll and Show Modal
     const el = document.getElementById(`room-${selectedRoom.id}`);
     if (el) {
       el.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -249,41 +314,101 @@ const App: React.FC = () => {
     return groups;
   }, [filteredRooms]);
 
+  // Login filtered users
+  const filteredUsers = useMemo(() => {
+    if (!loginSearch) return state.users;
+    return state.users.filter(u => 
+      u.name.includes(loginSearch) || 
+      u.phone.includes(loginSearch)
+    );
+  }, [state.users, loginSearch]);
+
 
   // --- Render ---
 
   if (!state.currentUser) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4">
-        <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md">
-          <h1 className="text-3xl font-bold text-slate-800 mb-2">在线选房系统</h1>
-          <p className="text-slate-500 mb-8">支持多电脑同时访问 (数据即时同步)</p>
-          
-          <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-2">
-            {state.users.map(user => (
-              <button 
-                key={user.id}
-                onClick={() => handleLogin(user.id)}
-                className="w-full flex items-center justify-between p-4 rounded-xl border border-slate-200 hover:border-indigo-500 hover:bg-indigo-50 transition-all group"
-              >
-                <div className="flex flex-col items-start">
-                  <span className="font-semibold text-slate-700 group-hover:text-indigo-700">{user.name}</span>
-                  <span className="text-xs text-slate-400">
-                    {user.isAdmin ? '管理员' : `客户 ${user.phone ? `(${user.phone})` : ''} - 剩余 ${user.maxSelections} 次`}
-                  </span>
-                </div>
-                <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 group-hover:bg-indigo-200 group-hover:text-indigo-600">
-                  →
-                </div>
-              </button>
-            ))}
+        <div className="bg-white p-6 sm:p-8 rounded-2xl shadow-xl w-full max-w-5xl flex flex-col max-h-[90vh]">
+          <div className="flex flex-col sm:flex-row justify-between items-center mb-6 gap-4">
+              <div>
+                <h1 className="text-2xl sm:text-3xl font-bold text-slate-800">在线选房系统</h1>
+                <p className="text-slate-500 text-sm mt-1">请选择您的身份登录 (支持 {state.users.length} 位用户)</p>
+              </div>
+              <input 
+                type="text" 
+                placeholder="🔍 搜索姓名或电话..." 
+                className="w-full sm:w-64 border border-slate-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                value={loginSearch}
+                onChange={(e) => setLoginSearch(e.target.value)}
+              />
           </div>
-          <div className="mt-8 pt-4 border-t border-slate-100 text-center">
-            <button onClick={handleResetData} className="text-xs text-red-400 hover:text-red-600 underline">
-              数据异常？点击重置系统
+          
+          <div className="flex-1 overflow-y-auto pr-2 min-h-0">
+             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+                {filteredUsers.map(user => (
+                  <button 
+                    key={user.id}
+                    onClick={() => handleInitiateLogin(user)}
+                    className={`
+                        flex flex-col items-start p-3 rounded-lg border text-left transition-all hover:shadow-md
+                        ${user.isAdmin 
+                            ? 'bg-slate-800 border-slate-700 text-white hover:bg-slate-700' 
+                            : 'bg-white border-slate-200 text-slate-700 hover:border-indigo-500 hover:bg-indigo-50'
+                        }
+                    `}
+                  >
+                    <div className="flex justify-between w-full items-start">
+                        <span className="font-bold text-sm truncate w-full">{user.name}</span>
+                        {user.isAdmin && <svg className="w-4 h-4 text-yellow-400 shrink-0" fill="currentColor" viewBox="0 0 20 20"><path d="M10 2a1 1 0 011 1v1.323l3.954 1.582 1.699-3.181A1 1 0 0118 4v2a1 1 0 01-1 1h-1.637l-1.928 3.616A3 3 0 0011 11.53V18a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6.47A3 3 0 005.165 10.61L3.237 7H1.6a1 1 0 01-1-1V4a1 1 0 011-1h1.76l1.699 3.18L9 4.323V3a1 1 0 011-1z" /></svg>}
+                    </div>
+                    <span className={`text-xs mt-1 ${user.isAdmin ? 'text-slate-300' : 'text-slate-400'}`}>
+                      {user.phone || '无电话'}
+                    </span>
+                    {!user.isAdmin && (
+                        <div className="mt-2 text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 font-mono">
+                            剩 {user.maxSelections} 次
+                        </div>
+                    )}
+                  </button>
+                ))}
+                {filteredUsers.length === 0 && (
+                    <div className="col-span-full text-center py-10 text-slate-400">
+                        未找到匹配用户
+                    </div>
+                )}
+             </div>
+          </div>
+
+          <div className="mt-6 pt-4 border-t border-slate-100 flex justify-between items-center text-xs text-slate-400">
+            <span>系统状态: 在线 (自动同步)</span>
+            <button onClick={handleResetData} className="hover:text-red-500 underline">
+              重置系统数据
             </button>
           </div>
         </div>
+
+        {/* Admin Password Modal */}
+        {pendingAdmin && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+                <form onSubmit={handleAdminLoginSubmit} className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-sm animate-scale-in">
+                    <h3 className="text-lg font-bold text-slate-800 mb-4">管理员验证</h3>
+                    <p className="text-sm text-slate-500 mb-4">请输入管理员密码以登录 <strong>{pendingAdmin.name}</strong> 的账户。</p>
+                    <input 
+                        type="password" 
+                        autoFocus
+                        value={passwordInput}
+                        onChange={(e) => setPasswordInput(e.target.value)}
+                        placeholder="请输入密码"
+                        className="w-full border border-slate-300 rounded-lg px-4 py-2 mb-4 focus:ring-2 focus:ring-indigo-500 outline-none"
+                    />
+                    <div className="flex gap-3">
+                        <button type="button" onClick={() => setPendingAdmin(null)} className="flex-1 py-2 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50">取消</button>
+                        <button type="submit" className="flex-1 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 font-medium">确认登录</button>
+                    </div>
+                </form>
+            </div>
+        )}
       </div>
     );
   }
