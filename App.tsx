@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { AppState, Room, RoomStatus, User, GenerateConfig } from './types';
-import { getInitialState, saveState, generateRooms, generateSpecialProject, exportToCSV, importFromCSV } from './services/dataService';
+import { getInitialState, saveState, generateRooms, generateSpecialProject, exportToCSV, importFromCSV, exportUsersToCSV, importUsersFromCSV } from './services/dataService';
 import { RoomCard } from './components/RoomCard';
 import { AdminPanel } from './components/AdminPanel';
 import { SelectionModal } from './components/SelectionModal';
@@ -332,6 +332,33 @@ const App: React.FC = () => {
     }
   };
 
+  const handleImportUsers = async (file: File) => {
+      try {
+          const text = (await file.text()) as string;
+          const newUsers = importUsersFromCSV(text);
+          
+          if (newUsers.length === 0) {
+              alert("未识别到有效客户数据，请检查 CSV 格式。");
+              return;
+          }
+
+          // De-duplicate based on Phone Number (assuming phone is unique identifier for business logic)
+          const existingPhones = new Set(state.users.map(u => u.phone));
+          const usersToAdd = newUsers.filter(u => !existingPhones.has(u.phone));
+          
+          if (usersToAdd.length > 0) {
+              updateGlobalState({ ...state, users: [...state.users, ...usersToAdd] });
+              alert(`成功导入 ${usersToAdd.length} 位新客户 (已跳过 ${newUsers.length - usersToAdd.length} 位重复号码)。`);
+          } else {
+              alert("导入完成，但所有客户号码已存在系统中。");
+          }
+
+      } catch (e) {
+          console.error(e);
+          alert("导入客户名单失败，请检查文件格式。");
+      }
+  };
+
   const handleAddUser = (name: string, phone: string, maxSelections: number) => {
     const newUser: User = {
       id: `u-${Date.now()}`,
@@ -549,6 +576,8 @@ const App: React.FC = () => {
               onExport={() => exportToCSV(state.rooms, state.users)} // Pass state.users here
               onImport={(f) => handleImport(f)}
               onAddUser={handleAddUser}
+              onExportUsers={() => exportUsersToCSV(state.users)}
+              onImportUsers={handleImportUsers}
               onResetData={handleResetData}
               users={state.users}
             />

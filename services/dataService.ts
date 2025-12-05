@@ -112,6 +112,8 @@ export const generateSpecialProject = (): Room[] => {
   return rooms;
 };
 
+// --- Room Data Import/Export ---
+
 export const exportToCSV = (rooms: Room[], users: User[]) => {
   // Create a lookup map for users
   const userMap = new Map(users.map(u => [u.id, u]));
@@ -132,11 +134,11 @@ export const exportToCSV = (rooms: Room[], users: User[]) => {
     ].join(',');
   });
   
-  const csvContent = "data:text/csv;charset=utf-8,\uFEFF" + [headers.join(','), ...rows].join('\n'); // Add BOM for Excel Chinese support
+  const csvContent = "data:text/csv;charset=utf-8,\uFEFF" + [headers.join(','), ...rows].join('\n'); // Add BOM
   const encodedUri = encodeURI(csvContent);
   const link = document.createElement("a");
   link.setAttribute("href", encodedUri);
-  link.setAttribute("download", `property_data_${new Date().toISOString().slice(0,10)}.csv`);
+  link.setAttribute("download", `房源数据_${new Date().toISOString().slice(0,10)}.csv`);
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
@@ -182,4 +184,58 @@ export const importFromCSV = (csvText: string): { rooms: Room[], importedUsers: 
     }
   }
   return { rooms, importedUsers: Array.from(importedUsers.values()) };
+};
+
+// --- User Data Only Import/Export ---
+
+export const exportUsersToCSV = (users: User[]) => {
+  const headers = ['客户姓名', '电话号码', '限购数量', '是否管理员(TRUE/FALSE)', '系统ID(可选)'];
+  const rows = users.map(u => [
+    u.name,
+    u.phone,
+    u.maxSelections,
+    u.isAdmin ? 'TRUE' : 'FALSE',
+    u.id
+  ].join(','));
+
+  const csvContent = "data:text/csv;charset=utf-8,\uFEFF" + [headers.join(','), ...rows].join('\n');
+  const encodedUri = encodeURI(csvContent);
+  const link = document.createElement("a");
+  link.setAttribute("href", encodedUri);
+  link.setAttribute("download", `客户名单_${new Date().toISOString().slice(0,10)}.csv`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+};
+
+export const importUsersFromCSV = (csvText: string): User[] => {
+  const lines = csvText.split('\n');
+  const users: User[] = [];
+  
+  // Skip header row
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    
+    const cols = line.split(',');
+    if (cols.length < 2) continue; // Must have name and phone at least
+
+    const name = cols[0]?.trim();
+    const phone = cols[1]?.trim();
+    
+    if (!name || !phone) continue;
+
+    const maxSelections = parseInt(cols[2]) || 1;
+    const isAdmin = cols[3]?.trim().toUpperCase() === 'TRUE';
+    const id = cols[4]?.trim() || `u-${Date.now()}-${Math.floor(Math.random()*1000)}`;
+
+    users.push({
+      id,
+      name,
+      phone,
+      maxSelections,
+      isAdmin
+    });
+  }
+  return users;
 };

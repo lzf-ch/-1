@@ -7,6 +7,8 @@ interface AdminPanelProps {
   onExport: () => void;
   onImport: (file: File) => void;
   onAddUser: (name: string, phone: string, count: number) => void;
+  onExportUsers: () => void;
+  onImportUsers: (file: File) => void;
   onResetData: () => void;
   users: User[];
 }
@@ -17,6 +19,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   onExport, 
   onImport, 
   onAddUser, 
+  onExportUsers,
+  onImportUsers,
   onResetData, 
   users 
 }) => {
@@ -32,9 +36,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [newUserPhone, setNewUserPhone] = useState('');
   const [newUserLimit, setNewUserLimit] = useState(1);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleDataFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       onImport(e.target.files[0]);
+    }
+  };
+
+  const handleUserFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      onImportUsers(e.target.files[0]);
     }
   };
 
@@ -80,25 +90,25 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       <section>
         <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center">
           <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
-          数据管理
+          数据管理 (房源库)
         </h3>
         <div className="flex flex-wrap gap-4 items-center">
           <button 
             onClick={onExport}
             className="flex items-center justify-center bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium py-2 px-4 rounded transition-colors"
           >
-            导出数据 (Excel/CSV)
+            导出完整数据 (CSV)
           </button>
           
           <div className="relative">
             <input 
               type="file" 
               accept=".csv"
-              onChange={handleFileChange}
+              onChange={handleDataFileChange}
               className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
             />
             <button className="flex items-center justify-center bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-medium py-2 px-4 rounded transition-colors">
-              导入数据 (CSV)
+              导入完整数据 (CSV)
             </button>
           </div>
 
@@ -117,7 +127,29 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
       {/* User Management */}
       <section>
-        <h3 className="text-lg font-bold text-slate-800 mb-4">用户管理</h3>
+        <div className="flex justify-between items-center mb-4">
+           <h3 className="text-lg font-bold text-slate-800">用户管理</h3>
+           <div className="flex gap-2">
+             <button 
+                onClick={onExportUsers}
+                className="text-indigo-600 hover:bg-indigo-50 border border-indigo-200 px-3 py-1.5 rounded text-xs font-medium transition-colors"
+             >
+                ⬇️ 导出客户名单
+             </button>
+             <div className="relative">
+                <input 
+                  type="file" 
+                  accept=".csv"
+                  onChange={handleUserFileChange}
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                />
+                <button className="text-indigo-600 hover:bg-indigo-50 border border-indigo-200 px-3 py-1.5 rounded text-xs font-medium transition-colors">
+                    ⬆️ 批量导入客户
+                </button>
+             </div>
+           </div>
+        </div>
+
         <div className="flex gap-2 mb-4 bg-slate-50 p-3 rounded-lg border border-slate-200">
           <input 
             type="text" 
