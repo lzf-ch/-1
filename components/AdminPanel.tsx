@@ -132,19 +132,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
            <div className="flex gap-2">
              <button 
                 onClick={onExportUsers}
-                className="text-indigo-600 hover:bg-indigo-50 border border-indigo-200 px-3 py-1.5 rounded text-xs font-medium transition-colors"
+                className="text-indigo-600 hover:bg-indigo-50 border border-indigo-200 px-3 py-1.5 rounded text-xs font-medium transition-colors bg-white"
              >
-                ⬇️ 导出客户名单
+                ⬇️ 导出客户名单 (Excel)
              </button>
              <div className="relative">
                 <input 
                   type="file" 
-                  accept=".csv"
+                  accept=".xlsx, .xls"
                   onChange={handleUserFileChange}
                   className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                 />
-                <button className="text-indigo-600 hover:bg-indigo-50 border border-indigo-200 px-3 py-1.5 rounded text-xs font-medium transition-colors">
-                    ⬆️ 批量导入客户
+                <button className="text-indigo-600 hover:bg-indigo-50 border border-indigo-200 px-3 py-1.5 rounded text-xs font-medium transition-colors bg-white">
+                    ⬆️ 批量导入客户 (Excel)
                 </button>
              </div>
            </div>

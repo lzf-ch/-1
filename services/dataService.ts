@@ -2,6 +2,9 @@ import { Room, RoomStatus, User, GenerateConfig, AppState } from "../types";
 
 const STORAGE_KEY = 'prime_estate_db_v1';
 
+// Declare XLSX global from CDN
+declare const XLSX: any;
+
 // Initial Mock Data
 const INITIAL_ADMIN: User = { id: 'admin', name: '系统管理员', phone: '13800000000', maxSelections: 999, isAdmin: true };
 const INITIAL_USER: User = { id: 'user1', name: '张三', phone: '13912345678', maxSelections: 1, isAdmin: false };
@@ -112,7 +115,7 @@ export const generateSpecialProject = (): Room[] => {
   return rooms;
 };
 
-// --- Room Data Import/Export ---
+// --- Room Data Import/Export (Still CSV for now as per request only for Users) ---
 
 export const exportToCSV = (rooms: Room[], users: User[]) => {
   // Create a lookup map for users
@@ -154,7 +157,6 @@ export const importFromCSV = (csvText: string): { rooms: Room[], importedUsers: 
     const line = lines[i].trim();
     if (!line) continue;
     
-    // Handle potential quotes in CSV (simplified split, assumes no commas in fields for now)
     const cols = line.split(',');
     if (cols.length < 5) continue;
 
@@ -172,13 +174,12 @@ export const importFromCSV = (csvText: string): { rooms: Room[], importedUsers: 
       id, building, floor, number, area, status, ownerId
     });
 
-    // Reconstruct user if data exists
     if (ownerId && ownerName && !importedUsers.has(ownerId)) {
         importedUsers.set(ownerId, {
             id: ownerId,
             name: ownerName,
             phone: ownerPhone,
-            maxSelections: 1, // Default value for imported users
+            maxSelections: 1, 
             isAdmin: false
         });
     }
@@ -186,56 +187,56 @@ export const importFromCSV = (csvText: string): { rooms: Room[], importedUsers: 
   return { rooms, importedUsers: Array.from(importedUsers.values()) };
 };
 
-// --- User Data Only Import/Export ---
+// --- User Data Excel Import/Export ---
 
-export const exportUsersToCSV = (users: User[]) => {
-  const headers = ['客户姓名', '电话号码', '限购数量', '是否管理员(TRUE/FALSE)', '系统ID(可选)'];
-  const rows = users.map(u => [
-    u.name,
-    u.phone,
-    u.maxSelections,
-    u.isAdmin ? 'TRUE' : 'FALSE',
-    u.id
-  ].join(','));
+export const exportUsersToExcel = (users: User[]) => {
+  const data = users.map(u => ({
+    '客户姓名': u.name,
+    '电话号码': u.phone,
+    '限购数量': u.maxSelections,
+    '是否管理员': u.isAdmin ? 'TRUE' : 'FALSE',
+    '系统ID': u.id
+  }));
 
-  const csvContent = "data:text/csv;charset=utf-8,\uFEFF" + [headers.join(','), ...rows].join('\n');
-  const encodedUri = encodeURI(csvContent);
-  const link = document.createElement("a");
-  link.setAttribute("href", encodedUri);
-  link.setAttribute("download", `客户名单_${new Date().toISOString().slice(0,10)}.csv`);
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
+  // Create worksheet
+  const worksheet = XLSX.utils.json_to_sheet(data);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, "客户名单");
+
+  // Write file
+  XLSX.writeFile(workbook, `客户名单_${new Date().toISOString().slice(0,10)}.xlsx`);
 };
 
-export const importUsersFromCSV = (csvText: string): User[] => {
-  const lines = csvText.split('\n');
+export const importUsersFromExcel = (buffer: ArrayBuffer): User[] => {
+  const workbook = XLSX.read(buffer, { type: 'array' });
+  const firstSheetName = workbook.SheetNames[0];
+  const worksheet = workbook.Sheets[firstSheetName];
+  
+  // Convert to JSON
+  const jsonData = XLSX.utils.sheet_to_json(worksheet);
+  
   const users: User[] = [];
   
-  // Skip header row
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
+  jsonData.forEach((row: any) => {
+    // Try to map fields based on Chinese headers
+    const name = row['客户姓名'] || row['姓名'];
+    const phone = row['电话号码'] || row['电话'];
     
-    const cols = line.split(',');
-    if (cols.length < 2) continue; // Must have name and phone at least
+    // Valid data check
+    if (!name || !phone) return;
 
-    const name = cols[0]?.trim();
-    const phone = cols[1]?.trim();
-    
-    if (!name || !phone) continue;
-
-    const maxSelections = parseInt(cols[2]) || 1;
-    const isAdmin = cols[3]?.trim().toUpperCase() === 'TRUE';
-    const id = cols[4]?.trim() || `u-${Date.now()}-${Math.floor(Math.random()*1000)}`;
+    const maxSelections = parseInt(row['限购数量'] || row['限额']) || 1;
+    const isAdmin = String(row['是否管理员'] || '').toUpperCase() === 'TRUE';
+    const id = row['系统ID'] || `u-${Date.now()}-${Math.floor(Math.random()*10000)}`;
 
     users.push({
-      id,
-      name,
-      phone,
+      id: String(id),
+      name: String(name).trim(),
+      phone: String(phone).trim(),
       maxSelections,
       isAdmin
     });
-  }
+  });
+
   return users;
 };

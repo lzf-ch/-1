@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { AppState, Room, RoomStatus, User, GenerateConfig } from './types';
-import { getInitialState, saveState, generateRooms, generateSpecialProject, exportToCSV, importFromCSV, exportUsersToCSV, importUsersFromCSV } from './services/dataService';
+import { getInitialState, saveState, generateRooms, generateSpecialProject, exportToCSV, importFromCSV, exportUsersToExcel, importUsersFromExcel } from './services/dataService';
 import { RoomCard } from './components/RoomCard';
 import { AdminPanel } from './components/AdminPanel';
 import { SelectionModal } from './components/SelectionModal';
@@ -334,15 +334,16 @@ const App: React.FC = () => {
 
   const handleImportUsers = async (file: File) => {
       try {
-          const text = (await file.text()) as string;
-          const newUsers = importUsersFromCSV(text);
+          // Changed from .text() to .arrayBuffer() for Excel processing
+          const buffer = await file.arrayBuffer();
+          const newUsers = importUsersFromExcel(buffer);
           
           if (newUsers.length === 0) {
-              alert("未识别到有效客户数据，请检查 CSV 格式。");
+              alert("未识别到有效客户数据，请检查 Excel 格式 (需要表头: 客户姓名, 电话号码)。");
               return;
           }
 
-          // De-duplicate based on Phone Number (assuming phone is unique identifier for business logic)
+          // De-duplicate based on Phone Number
           const existingPhones = new Set(state.users.map(u => u.phone));
           const usersToAdd = newUsers.filter(u => !existingPhones.has(u.phone));
           
@@ -355,7 +356,7 @@ const App: React.FC = () => {
 
       } catch (e) {
           console.error(e);
-          alert("导入客户名单失败，请检查文件格式。");
+          alert("导入客户名单失败，请检查文件格式是否为 .xlsx 或 .xls。");
       }
   };
 
@@ -576,7 +577,7 @@ const App: React.FC = () => {
               onExport={() => exportToCSV(state.rooms, state.users)} // Pass state.users here
               onImport={(f) => handleImport(f)}
               onAddUser={handleAddUser}
-              onExportUsers={() => exportUsersToCSV(state.users)}
+              onExportUsers={() => exportUsersToExcel(state.users)}
               onImportUsers={handleImportUsers}
               onResetData={handleResetData}
               users={state.users}
