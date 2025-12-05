@@ -7,10 +7,19 @@ interface AdminPanelProps {
   onExport: () => void;
   onImport: (file: File) => void;
   onAddUser: (name: string, phone: string, count: number) => void;
+  onResetData: () => void;
   users: User[];
 }
 
-export const AdminPanel: React.FC<AdminPanelProps> = ({ onGenerate, onGenerateSpecial, onExport, onImport, onAddUser, users }) => {
+export const AdminPanel: React.FC<AdminPanelProps> = ({ 
+  onGenerate, 
+  onGenerateSpecial, 
+  onExport, 
+  onImport, 
+  onAddUser, 
+  onResetData, 
+  users 
+}) => {
   const [config, setConfig] = useState<GenerateConfig>({
     buildingCount: 3,
     floorsPerBuilding: 10,
@@ -84,7 +93,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onGenerate, onGenerateSp
           <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
           数据管理
         </h3>
-        <div className="flex space-x-4">
+        <div className="flex flex-wrap gap-4 items-center">
           <button 
             onClick={onExport}
             className="flex items-center justify-center bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium py-2 px-4 rounded transition-colors"
@@ -102,6 +111,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onGenerate, onGenerateSp
             <button className="flex items-center justify-center bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-medium py-2 px-4 rounded transition-colors">
               导入数据 (CSV)
             </button>
+          </div>
+
+          <div className="flex-1 text-right">
+             <button 
+               onClick={onResetData}
+               className="text-red-600 hover:text-red-700 hover:bg-red-50 px-4 py-2 rounded text-sm font-medium border border-red-200 transition-colors"
+             >
+               ⚠️ 重置系统数据
+             </button>
           </div>
         </div>
       </section>

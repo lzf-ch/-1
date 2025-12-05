@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { AppState, Room, RoomStatus, User, GenerateConfig } from './types';
 import { getInitialState, saveState, generateRooms, generateSpecialProject, exportToCSV, importFromCSV } from './services/dataService';
 import { RoomCard } from './components/RoomCard';
@@ -6,6 +6,7 @@ import { AdminPanel } from './components/AdminPanel';
 import { SelectionModal } from './components/SelectionModal';
 
 const ADMIN_PASSWORD = "5658135";
+const SYNC_CHANNEL_NAME = 'prime_estate_sync_channel';
 
 const App: React.FC = () => {
   const [state, setState] = useState<AppState>(getInitialState);
@@ -29,57 +30,76 @@ const App: React.FC = () => {
   const [pendingAdmin, setPendingAdmin] = useState<User | null>(null);
   const [passwordInput, setPasswordInput] = useState('');
 
-  // Data Synchronization: Polling & Event Listener
+  // Broadcast Channel for instant sync
+  const channelRef = useRef<BroadcastChannel | null>(null);
+
+  // Data Synchronization Logic
   useEffect(() => {
-    // Listener for cross-tab sync
+    // 1. Initialize BroadcastChannel
+    const channel = new BroadcastChannel(SYNC_CHANNEL_NAME);
+    channelRef.current = channel;
+
+    const syncFromDisk = () => {
+      try {
+        const latestDiskState = getInitialState();
+        setState(prevState => {
+          // Deep compare to avoid unnecessary re-renders (Performance Optimization)
+          const roomsChanged = JSON.stringify(latestDiskState.rooms) !== JSON.stringify(prevState.rooms);
+          const usersChanged = JSON.stringify(latestDiskState.users) !== JSON.stringify(prevState.users);
+          
+          if (roomsChanged || usersChanged) {
+            return {
+              ...latestDiskState,
+              currentUser: prevState.currentUser // Important: Preserve local session
+            };
+          }
+          return prevState;
+        });
+      } catch (e) {
+        console.error("Sync error", e);
+      }
+    };
+
+    // 2. Listen to Broadcast Channel (Instant)
+    channel.onmessage = (event) => {
+      if (event.data === 'UPDATE_DB') {
+        syncFromDisk();
+      }
+    };
+
+    // 3. Listen to Storage Event (Backup for some browsers)
     const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === 'prime_estate_db_v1' && e.newValue) {
-        try {
-          const remoteState = JSON.parse(e.newValue);
-          setState(prev => ({
-            ...remoteState,
-            currentUser: prev.currentUser 
-          }));
-        } catch (err) {
-          console.error("Data sync error:", err);
-        }
+      if (e.key === 'prime_estate_db_v1') {
+        syncFromDisk();
       }
     };
     window.addEventListener('storage', handleStorageChange);
 
-    // Polling for robustness (simulating real-time fetch)
-    const pollInterval = setInterval(() => {
-        try {
-            const latest = getInitialState();
-            // We update state to match disk, but strictly preserve the local currentUser session
-            setState(prev => {
-                // Optimization: In a real app, we'd check timestamps or hash. 
-                // Here we simply overwrite rooms/users to ensure consistency.
-                return {
-                    ...latest,
-                    currentUser: prev.currentUser // Keep local login
-                };
-            });
-        } catch(e) {
-            console.error("Polling error", e);
-        }
-    }, 2000);
+    // 4. Polling (Safety net for file system delays or non-event updates)
+    // Runs every 1 second to ensure eventually consistent data
+    const pollInterval = setInterval(syncFromDisk, 1000);
 
     return () => {
-        window.removeEventListener('storage', handleStorageChange);
-        clearInterval(pollInterval);
+      channel.close();
+      window.removeEventListener('storage', handleStorageChange);
+      clearInterval(pollInterval);
     };
   }, []);
 
-  // Persist on change
-  const updateState = (newState: AppState) => {
-    setState(newState);
-    saveState(newState);
+  // Centralized State Update Wrapper
+  const updateGlobalState = (newState: AppState) => {
+    setState(newState); // Optimistic UI update
+    saveState(newState); // Write to disk
+    // Notify other tabs immediately
+    if (channelRef.current) {
+      channelRef.current.postMessage('UPDATE_DB');
+    }
   };
 
   const handleResetData = () => {
-    if(window.confirm("确定要重置所有数据吗？这将清除所有选房记录和用户数据，恢复到初始状态。")) {
+    if(window.confirm("【严重警告】\n此操作将删除所有选房记录和用户数据！\n\n确定要重置系统吗？")) {
       localStorage.removeItem('prime_estate_db_v1');
+      if (channelRef.current) channelRef.current.postMessage('UPDATE_DB');
       window.location.reload();
     }
   };
@@ -90,7 +110,8 @@ const App: React.FC = () => {
           setPendingAdmin(user);
           setPasswordInput('');
       } else {
-          updateState({ ...state, currentUser: user });
+          // Update current user locally
+          setState(prev => ({ ...prev, currentUser: user }));
       }
   };
 
@@ -98,7 +119,7 @@ const App: React.FC = () => {
       e.preventDefault();
       if (passwordInput === ADMIN_PASSWORD) {
           if (pendingAdmin) {
-              updateState({ ...state, currentUser: pendingAdmin });
+              setState(prev => ({ ...prev, currentUser: pendingAdmin }));
               setPendingAdmin(null);
           }
       } else {
@@ -108,7 +129,7 @@ const App: React.FC = () => {
   };
 
   const handleLogout = () => {
-    updateState({ ...state, currentUser: null });
+    setState(prev => ({ ...prev, currentUser: null }));
     setView('GRID'); // Reset view on logout
   };
 
@@ -145,6 +166,13 @@ const App: React.FC = () => {
         alert("请先登录");
         return;
     }
+    // Pre-check status (Optimistic)
+    if (room.status !== RoomStatus.AVAILABLE && room.ownerId !== state.currentUser.id && !state.currentUser.isAdmin) {
+      if (room.status === RoomStatus.LOCKED) alert("该房源已被锁定");
+      else alert("该房源已被选择");
+      return;
+    }
+
     setModalRoom(room);
     setIsModalOpen(true);
   };
@@ -152,8 +180,9 @@ const App: React.FC = () => {
   const executeSelection = () => {
     if (!modalRoom || !state.currentUser) return;
 
-    // CRITICAL: Re-read state from storage to prevent race conditions (Simulated Backend Check)
-    const latestState = getInitialState();
+    // --- TRANSACTION START ---
+    // 1. Force read latest state from disk (Critical for concurrency)
+    const latestState = getInitialState(); 
     const target = latestState.rooms.find(r => r.id === modalRoom.id);
 
     if (!target) {
@@ -164,7 +193,7 @@ const App: React.FC = () => {
 
     const currentUserId = state.currentUser.id;
     const isUserAdmin = state.currentUser.isAdmin;
-    let updatedRooms = [...latestState.rooms]; // Work on fresh list
+    let updatedRooms = [...latestState.rooms];
 
     // Admin Mode Logic
     if (isUserAdmin && adminMode === 'LOCK') {
@@ -173,48 +202,49 @@ const App: React.FC = () => {
     } 
     // User Mode Logic
     else {
-        // Deselect logic (If I own it, I can return it)
+        // Deselect logic
         if (target.ownerId === currentUserId) {
              updatedRooms = updatedRooms.map(r => r.id === target.id ? { ...r, status: RoomStatus.AVAILABLE, ownerId: null } : r);
         } 
         // Select logic
         else if (target.status === RoomStatus.AVAILABLE) {
-             // 1. Check Global Availability again (Double Check)
+             // 2. Concurrency Check: Is it STILL available?
              if (target.status !== RoomStatus.AVAILABLE) {
-                 alert("很抱歉，该房源刚刚已被其他人抢选！");
+                 alert("【手慢了！】该房源刚刚已被其他人抢选。请刷新页面或选择其他房源。");
                  setIsModalOpen(false);
+                 // Force sync UI immediately
+                 setState(prev => ({ ...prev, rooms: latestState.rooms })); 
                  return;
              }
 
-             // 2. Limit check (Must count usage from Fresh State)
+             // 3. Quota Check
              const mySelections = latestState.rooms.filter(r => r.ownerId === currentUserId);
              if (mySelections.length >= state.currentUser.maxSelections) {
-                 alert(`您只能选择 ${state.currentUser.maxSelections} 套房源。`);
+                 alert(`您的名额已满，只能选择 ${state.currentUser.maxSelections} 套房源。`);
                  setIsModalOpen(false);
                  return;
              }
              
-             // 3. Commit
+             // 4. Commit Change
              updatedRooms = updatedRooms.map(r => r.id === target.id ? { ...r, status: RoomStatus.SELECTED, ownerId: currentUserId } : r);
         } else {
-             // Already taken by someone else
-             alert("该房源不可选择（已被锁定或选择）");
+             alert("操作失败：该房源当前状态不可选择。");
              setIsModalOpen(false);
              return;
         }
     }
 
-    // Update Global State
-    // We preserve the current user session but update everything else
+    // 5. Write to DB
     const nextState = {
         ...latestState,
-        currentUser: state.currentUser,
+        currentUser: state.currentUser, // Keep local user
         rooms: updatedRooms
     };
     
-    updateState(nextState);
+    updateGlobalState(nextState);
     setIsModalOpen(false);
     setModalRoom(null);
+    // --- TRANSACTION END ---
   };
 
   /**
@@ -225,14 +255,18 @@ const App: React.FC = () => {
           alert("请先选择房源");
           return;
       }
+      // Find room in CURRENT state to trigger modal
       const room = state.rooms.find(r => r.id === quickRoomId);
       if (room) {
           handleRoomClick(room);
+      } else {
+          // Fallback if state is slightly stale, try finding in fresh state? 
+          // Usually handleRoomClick handles null, but let's be safe.
+          alert("房源信息获取失败，请尝试刷新。");
       }
   };
 
   const handleRandomSelect = () => {
-    // Always fetch fresh state for random to avoid picking a taken room
     const latestState = getInitialState();
     const availableRooms = latestState.rooms.filter(r => r.status === RoomStatus.AVAILABLE);
     
@@ -255,20 +289,23 @@ const App: React.FC = () => {
     }
     
     setTimeout(() => {
-        handleRoomClick(selectedRoom);
+        // Need to pass the room object. We can use the one from state to ensure consistency or the one we just found.
+        // Better to find it in the current React state to ensure UI object equality if strict mode is on.
+        const roomInState = state.rooms.find(r => r.id === selectedRoom.id);
+        if (roomInState) handleRoomClick(roomInState);
     }, 500);
   };
 
   // Admin Actions
   const handleGenerate = (config: GenerateConfig) => {
     const newRooms = generateRooms(config);
-    updateState({ ...state, rooms: newRooms });
+    updateGlobalState({ ...state, rooms: newRooms });
     alert(`成功生成 ${newRooms.length} 套房源。`);
   };
 
   const handleGenerateSpecial = () => {
     const newRooms = generateSpecialProject();
-    updateState({ ...state, rooms: newRooms });
+    updateGlobalState({ ...state, rooms: newRooms });
     alert(`成功初始化 4栋 (1-3栋/34F/6户, 4栋/34F/20户)，共 ${newRooms.length} 套。`);
   }
 
@@ -277,7 +314,7 @@ const App: React.FC = () => {
       const text = (await file.text()) as string;
       const rooms = importFromCSV(text);
       if(rooms.length > 0) {
-        updateState({ ...state, rooms });
+        updateGlobalState({ ...state, rooms });
         alert("导入成功！");
       } else {
         alert("CSV 解析失败，无有效数据。");
@@ -295,7 +332,7 @@ const App: React.FC = () => {
       maxSelections,
       isAdmin: false
     };
-    updateState({ ...state, users: [...state.users, newUser] });
+    updateGlobalState({ ...state, users: [...state.users, newUser] });
   };
 
   // Filtered Grid Data
@@ -381,10 +418,7 @@ const App: React.FC = () => {
           </div>
 
           <div className="mt-6 pt-4 border-t border-slate-100 flex justify-between items-center text-xs text-slate-400">
-            <span>系统状态: 在线 (自动同步)</span>
-            <button onClick={handleResetData} className="hover:text-red-500 underline">
-              重置系统数据
-            </button>
+            <span>系统状态: 多窗口实时同步中</span>
           </div>
         </div>
 
@@ -490,6 +524,7 @@ const App: React.FC = () => {
               onExport={() => exportToCSV(state.rooms)}
               onImport={(f) => handleImport(f)}
               onAddUser={handleAddUser}
+              onResetData={handleResetData}
               users={state.users}
             />
           </div>
