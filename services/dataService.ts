@@ -18,13 +18,8 @@ export const getInitialState = (): AppState => {
     }
   } catch (e) {
     console.error("State load error (data corruption likely). Resetting to default.", e);
-    // Optional: Clear corrupted data to fix subsequent reloads
-    // localStorage.removeItem(STORAGE_KEY);
   }
   
-  // Requirement: Default to the specific project structure if no data exists
-  // 1-3 Buildings: 34 floors, 6 units
-  // 4th Building: 34 floors, 20 units
   const defaultRooms = generateSpecialProject();
 
   return {
@@ -74,8 +69,6 @@ export const generateRooms = (config: GenerateConfig): Room[] => {
 };
 
 // Specific Generator for the User Requirement
-// 1-3 Buildings: 34 floors, 6 units
-// 4th Building: 34 floors, 20 units
 export const generateSpecialProject = (): Room[] => {
   const rooms: Room[] = [];
   const floors = Array.from({ length: 34 }, (_, i) => i + 1); // 34 Floors
@@ -119,42 +112,74 @@ export const generateSpecialProject = (): Room[] => {
   return rooms;
 };
 
-export const exportToCSV = (rooms: Room[]) => {
-  const headers = ['ID', '楼栋', '楼层', '房号', '面积', '状态', '拥有者ID'];
-  const rows = rooms.map(r => [
-    r.id, r.building, r.floor, r.number, r.area, r.status, r.ownerId || ''
-  ].join(','));
+export const exportToCSV = (rooms: Room[], users: User[]) => {
+  // Create a lookup map for users
+  const userMap = new Map(users.map(u => [u.id, u]));
+
+  const headers = ['ID', '楼栋', '楼层', '房号', '面积', '状态', '拥有者ID', '拥有者姓名', '拥有者电话'];
+  const rows = rooms.map(r => {
+    const owner = r.ownerId ? userMap.get(r.ownerId) : null;
+    return [
+      r.id, 
+      r.building, 
+      r.floor, 
+      r.number, 
+      r.area, 
+      r.status, 
+      r.ownerId || '',
+      owner ? owner.name : '',
+      owner ? owner.phone : ''
+    ].join(',');
+  });
   
-  const csvContent = "data:text/csv;charset=utf-8," + [headers.join(','), ...rows].join('\n');
+  const csvContent = "data:text/csv;charset=utf-8,\uFEFF" + [headers.join(','), ...rows].join('\n'); // Add BOM for Excel Chinese support
   const encodedUri = encodeURI(csvContent);
   const link = document.createElement("a");
   link.setAttribute("href", encodedUri);
-  link.setAttribute("download", "property_data.csv");
+  link.setAttribute("download", `property_data_${new Date().toISOString().slice(0,10)}.csv`);
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
 };
 
-export const importFromCSV = (csvText: string): Room[] => {
+export const importFromCSV = (csvText: string): { rooms: Room[], importedUsers: User[] } => {
   const lines = csvText.split('\n');
   const rooms: Room[] = [];
+  const importedUsers: Map<string, User> = new Map();
   
+  // Skip header row
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i].trim();
     if (!line) continue;
     
+    // Handle potential quotes in CSV (simplified split, assumes no commas in fields for now)
     const cols = line.split(',');
     if (cols.length < 5) continue;
 
+    const id = cols[0];
+    const building = cols[1];
+    const floor = parseInt(cols[2]);
+    const number = cols[3];
+    const area = parseFloat(cols[4]);
+    const status = cols[5] as RoomStatus;
+    const ownerId = cols[6] || null;
+    const ownerName = cols[7] || '';
+    const ownerPhone = cols[8] || '';
+
     rooms.push({
-      id: cols[0],
-      building: cols[1],
-      floor: parseInt(cols[2]),
-      number: cols[3],
-      area: parseFloat(cols[4]),
-      status: cols[5] as RoomStatus,
-      ownerId: cols[6] || null
+      id, building, floor, number, area, status, ownerId
     });
+
+    // Reconstruct user if data exists
+    if (ownerId && ownerName && !importedUsers.has(ownerId)) {
+        importedUsers.set(ownerId, {
+            id: ownerId,
+            name: ownerName,
+            phone: ownerPhone,
+            maxSelections: 1, // Default value for imported users
+            isAdmin: false
+        });
+    }
   }
-  return rooms;
+  return { rooms, importedUsers: Array.from(importedUsers.values()) };
 };

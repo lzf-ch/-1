@@ -168,9 +168,7 @@ const App: React.FC = () => {
     }
     // Pre-check status (Optimistic)
     if (room.status !== RoomStatus.AVAILABLE && room.ownerId !== state.currentUser.id && !state.currentUser.isAdmin) {
-      if (room.status === RoomStatus.LOCKED) alert("该房源已被锁定");
-      else alert("该房源已被选择");
-      return;
+      // Just show modal to display who took it (handled in SelectionModal now)
     }
 
     setModalRoom(room);
@@ -312,14 +310,24 @@ const App: React.FC = () => {
   const handleImport = async (file: File) => {
     try {
       const text = (await file.text()) as string;
-      const rooms = importFromCSV(text);
+      // Handle the new return format with rooms and potential new users
+      const { rooms, importedUsers } = importFromCSV(text);
+      
       if(rooms.length > 0) {
-        updateGlobalState({ ...state, rooms });
-        alert("导入成功！");
+        // Merge imported users with existing users, preferring existing ones if ID conflict (or could overwrite)
+        // Here we just add new ones that don't exist
+        const existingUserIds = new Set(state.users.map(u => u.id));
+        const newUsers = importedUsers.filter(u => !existingUserIds.has(u.id));
+        
+        const mergedUsers = [...state.users, ...newUsers];
+
+        updateGlobalState({ ...state, rooms, users: mergedUsers });
+        alert(`导入成功！更新了 ${rooms.length} 套房源，添加了 ${newUsers.length} 位缺失的客户信息。`);
       } else {
         alert("CSV 解析失败，无有效数据。");
       }
     } catch (e) {
+      console.error(e);
       alert("文件读取失败");
     }
   };
@@ -360,6 +368,16 @@ const App: React.FC = () => {
     );
   }, [state.users, loginSearch]);
 
+  // Pre-calculate user usage for performance (O(Rooms) instead of O(Rooms * Users))
+  const userUsageMap = useMemo(() => {
+    const map = new Map<string, number>();
+    state.rooms.forEach(r => {
+        if (r.ownerId) {
+            map.set(r.ownerId, (map.get(r.ownerId) || 0) + 1);
+        }
+    });
+    return map;
+  }, [state.rooms]);
 
   // --- Render ---
 
@@ -383,7 +401,12 @@ const App: React.FC = () => {
           
           <div className="flex-1 overflow-y-auto pr-2 min-h-0">
              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-                {filteredUsers.map(user => (
+                {filteredUsers.map(user => {
+                  // Calculate remaining selections
+                  const used = userUsageMap.get(user.id) || 0;
+                  const remaining = Math.max(0, user.maxSelections - used);
+
+                  return (
                   <button 
                     key={user.id}
                     onClick={() => handleInitiateLogin(user)}
@@ -404,11 +427,11 @@ const App: React.FC = () => {
                     </span>
                     {!user.isAdmin && (
                         <div className="mt-2 text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 font-mono">
-                            剩 {user.maxSelections} 次
+                            剩 {remaining} 次
                         </div>
                     )}
                   </button>
-                ))}
+                )})}
                 {filteredUsers.length === 0 && (
                     <div className="col-span-full text-center py-10 text-slate-400">
                         未找到匹配用户
@@ -453,9 +476,11 @@ const App: React.FC = () => {
         isOpen={isModalOpen}
         room={modalRoom}
         currentUserIds={state.currentUser?.id}
-        isAdmin={state.currentUser.isAdmin && adminMode === 'LOCK'}
+        isAdmin={state.currentUser.isAdmin} // Passed global isAdmin here for permission check in Modal
+        adminModeLock={state.currentUser.isAdmin && adminMode === 'LOCK'} // Separate prop for logic
         onConfirm={executeSelection}
         onCancel={() => setIsModalOpen(false)}
+        users={state.users} // Pass users for owner lookup
       />
 
       {/* Header */}
@@ -521,7 +546,7 @@ const App: React.FC = () => {
             <AdminPanel 
               onGenerate={handleGenerate}
               onGenerateSpecial={handleGenerateSpecial}
-              onExport={() => exportToCSV(state.rooms)}
+              onExport={() => exportToCSV(state.rooms, state.users)} // Pass state.users here
               onImport={(f) => handleImport(f)}
               onAddUser={handleAddUser}
               onResetData={handleResetData}
