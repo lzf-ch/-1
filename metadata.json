@@ -1,0 +1,5 @@
+{
+  "name": "在线选房系统",
+  "description": "一个支持实时多用户协作、可视化管理、后台配置及随机摇号选房的在线房源甄选系统。",
+  "requestFramePermissions": []
+}
